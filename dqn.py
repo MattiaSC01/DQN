@@ -290,6 +290,7 @@ class Trainer:
         frames = th.cat([th.zeros((self.num_frames - 1, 84, 84)), observation], dim=0)
         done = False
         idx = 0
+        cumulative_reward = 0
 
         while not done:
             if idx % self.k == 0:
@@ -318,14 +319,22 @@ class Trainer:
             frames = next_frames
             observation = next_observation
             done = terminated or truncated
+            cumulative_reward += reward
             self.step += 1
             idx += 1
+        metrics = {
+            "collect/reward": cumulative_reward,
+            "collect/length": idx,
+            "collect/reward_per_step": cumulative_reward / idx,
+        }
+        self.logger.log_metrics(metrics, step=self.episode)
 
     def make_checkpoint(self):
         th.save(self.model.state_dict(), "dqn.pth")
 
     def scale_reward(self, reward):
-        return th.sign(reward)
+        # return th.sign(reward)
+        return reward
 
     def get_optimizer(self):
         return th.optim.RMSprop(self.model.parameters(), lr=1e-4, weight_decay=1e-4)
