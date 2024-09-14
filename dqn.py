@@ -159,6 +159,8 @@ class Trainer:
         logger: Logger,
         num_frames: int = 4,
         device: str | th.device = "cpu",
+        eval_interval: int = 500,
+        eval_episodes: int = 25,
     ):
         self.model = model
         self.env = env
@@ -168,8 +170,9 @@ class Trainer:
         self.optimizer = self.get_optimizer()
         self.epsilon = 1.0
         self.k = 4
-
         self.device = th.device(device)
+        self.eval_interval = eval_interval
+        self.eval_episodes = eval_episodes
         self.model.to(self.device)
 
     def train(
@@ -180,6 +183,7 @@ class Trainer:
         gamma: float = 1.0,
     ):
         self.episode = 0
+        self.step = 0
         self.learning_starts = learning_starts
         self.num_episodes = num_episodes
         self.gamma = gamma
@@ -191,9 +195,26 @@ class Trainer:
             print(f"Episode {self.episode}")
             self.collect_rollout()
             if self.episode > self.learning_starts:
-                loss = self.train_step()
+                train_loss = self.train_step()
+                metrics = {"train/loss": train_loss, "epsilon": self.epsilon}
+                if self.episode % self.eval_interval == 0:
+                    cumulative_rewards, episode_lengths, rewards_per_step = (
+                        self.evaluate()
+                    )
+                    metrics.update(
+                        {
+                            "eval/mean_reward": np.mean(cumulative_rewards),
+                            "eval/std_reward": np.std(cumulative_rewards),
+                            "eval/max_reward": np.max(cumulative_rewards),
+                            "eval/mean_length": np.mean(episode_lengths),
+                            "eval/std_length": np.std(episode_lengths),
+                            "eval/max_length": np.max(episode_lengths),
+                            "eval/mean_reward_per_step": np.mean(rewards_per_step),
+                        }
+                    )
                 self.logger.log_metrics(
-                    {"loss": loss, "epsilon": self.epsilon}, step=self.episode
+                    metrics,
+                    step=self.episode,
                 )
             self.episode += 1
             self.update_epsilon()
@@ -228,6 +249,38 @@ class Trainer:
         self.optimizer.step()
 
         return loss.item()
+
+    @th.inference_mode()
+    def evaluate(self):
+        self.model.eval()
+        cumulative_rewards, episode_lengths, rewards_per_step = [], [], []
+
+        for _ in range(self.eval_episodes):
+            observation, info = self.env.reset()
+            observation = input_transform(observation)
+            frames = th.cat(
+                [th.zeros((self.num_frames - 1, 84, 84)), observation], dim=0
+            )
+            done = False
+            cumulative_reward = 0
+            episode_length = 0
+
+            while not done:
+                action = self.model.sample_action(frames.to(self.device), 0.05)
+                next_observation, reward, terminated, truncated, info = self.env.step(
+                    action
+                )
+                next_observation = input_transform(next_observation)
+                next_frames = th.cat([frames[1:], next_observation], dim=0)
+                frames = next_frames
+                observation = next_observation
+                done = terminated or truncated
+                cumulative_reward += reward
+                episode_length += 1
+            cumulative_rewards.append(cumulative_reward)
+            episode_lengths.append(episode_length)
+            rewards_per_step.append(cumulative_reward / episode_length)
+        return cumulative_rewards, episode_lengths, rewards_per_step
 
     @th.no_grad()
     def collect_rollout(self):
@@ -265,6 +318,7 @@ class Trainer:
             frames = next_frames
             observation = next_observation
             done = terminated or truncated
+            self.step += 1
             idx += 1
 
     def make_checkpoint(self):
@@ -282,14 +336,14 @@ class Trainer:
 
 if __name__ == "__main__":
     config = {
-        "num_episodes": 10_000,
-        "learning_starts": 64,
+        "num_episodes": 100_000,
+        "learning_starts": 256,
         "batch_size": 32,
-        "gamma": 0.99,
+        "gamma": 1.0,
         "game": "Pong-v4",
         "num_frames": 4,
         "device": "mps",
-        "buffer_capacity": 1000,
+        "buffer_capacity": 10_000,
     }
 
     env = gym.make(config["game"])
