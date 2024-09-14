@@ -7,6 +7,16 @@ import gymnasium as gym
 import wandb
 
 
+# TODO: parallelize the training loop: have a training process
+# that makes gradient updates, and some rollouts processes that
+# collect transitions and push them to the buffer.
+# TODO: checkpoints at regular intervals
+# TODO: save a video of the agent playing the game at regular intervals
+# TODO: log histograms of the gradients and weights
+# TODO: log also histograms of rewards instead of just statistics
+# TODO: try to replicate the results of the DQN paper
+
+
 def epsilon_greedy(q_values: th.Tensor, epsilon: float) -> int:
     if np.random.rand() < epsilon:
         return np.random.randint(len(q_values))
